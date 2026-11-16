@@ -5,6 +5,7 @@ from fastapi.responses import JSONResponse
 from src.config.database import Base,engine
 from src.models import entities
 from src.routes.api import router
+from src.routes.normalize import router as normalize_router
 from src.middlewares.request import RequestId,SecurityHeaders
 @asynccontextmanager
 async def lifespan(app):
@@ -17,7 +18,7 @@ async def lifespan(app):
  yield
 app=FastAPI(title='剧院场次结算透视',lifespan=lifespan)
 app.add_middleware(RequestId);app.add_middleware(SecurityHeaders)
-app.include_router(router)
+app.include_router(router);app.include_router(normalize_router)
 @app.get('/health')
 def health():
  from sqlalchemy import text

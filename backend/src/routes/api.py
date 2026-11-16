@@ -9,6 +9,7 @@ from src.utils.security import verify,token
 from src.services.business import audit,dump
 from src.services.settlements import save
 from src.services.analysis import key
+from src.services.normalize_service import snapshot_rows
 from src.controllers.business import ensure_pivot,ensure_review,cell
 router=APIRouter()
 @router.post('/auth/login')
@@ -30,8 +31,9 @@ def edit(i:int,data:SettlementInput,u=Depends(editor),s=Depends(db)):
 def pivots(u=Depends(current),s=Depends(db)):return [dump(r) for r in s.query(Pivot).order_by(Pivot.id.desc()).all()]
 @router.post('/pivots')
 def submit(data:PivotInput,u=Depends(editor),s=Depends(db)):
- rows=[dump(r) for r in s.query(Settlement).order_by(Settlement.id).all()]
- r=Pivot(**data.model_dump(),result={'snapshot':rows});s.add(r);s.commit()
+ rows,exclusion=snapshot_rows(s,data.normalize_job_id)
+ r=Pivot(name=data.name,row_dim=data.row_dim,col_dim=data.col_dim,normalize_job_id=data.normalize_job_id,
+         result={'snapshot':rows,'exclusion':exclusion});s.add(r);s.commit()
  try:redis.Redis.from_url(os.environ['REDIS_URL']).rpush('stage:pivots',r.id)
  except redis.RedisError:r.state='failed';r.error='队列暂不可用，请恢复后新建透视';s.commit();raise HTTPException(503,r.error)
  audit(s,u,'提交透视 '+str(r.id));return dump(r)

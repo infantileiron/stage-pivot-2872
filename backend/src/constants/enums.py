@@ -1,5 +1,13 @@
 ROLES=('admin','analyst','viewer')
 STATES=('queued','running','done','failed')
-DIMENSIONS=('venue','play','channel','month')
+DIMENSIONS=('venue','play','nplay','channel','month')
 VENUES=('云幕大剧场','河畔小剧场','星光排练厅')
 CHANNELS=('剧院直营','票务合作','团体专场')
+RULE_STATES=('draft','active')
+JOB_KINDS=('trial','activate')
+ISOLATION_REASONS=('no_match','cycle','overlap','invalid_chain')
+REASON_TEXT={'no_match':'无匹配别名规则','cycle':'规则链存在循环','overlap':'同场馆同日期存在交叠歧义规则','invalid_chain':'规则链终点未指向标准演出'}
+META_RULE_VERSION='rule_version'
+META_SETTLEMENT_VERSION='settlement_version'
+META_ACTIVE_JOB='active_job_id'
+MAX_CHAIN_DEPTH=16

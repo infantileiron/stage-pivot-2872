@@ -6,7 +6,7 @@
 
 云幕剧院有云幕大剧场、河畔小剧场和星光排练厅。财务组当前把 `云幕_场次结算_20261115.xlsx` 中多张表复制到工作簿，再按场馆和渠道求和，最后在邮件里解释回单差异。痛点是座位百分比被简单平均、分币四舍五入不守恒、原始明细改动后难以重现旧结论。上游是独立场次票款及核验记录；本项目替代布局、计算、追溯及复核；下游是财务负责人核对渠道回单，不触发付款。
 
-四页：结算明细（录入/修订）、透视布局（白名单行列方案）、结算透视（守恒总计/冻结下钻/导出）、差异复核（回单预期/原因/签核）。三核心实体 Settlement、Pivot、Review，另有User/Audit。每条记录为独立场次，渠道是主售票渠道；当前不拆分同一场次的多个售票渠道座位。
+四页：结算明细（录入/修订/归属链）、透视布局（白名单行列方案）、结算透视（守恒总计/冻结下钻/导出）、差异复核（回单预期/原因/签核），另设演出归一（标准演出、别名规则、试算/启用、归属与隔离）。三核心实体 Settlement、Pivot、Review，另有 User/Audit；归一实体 StandardPlay/AliasRule/NormalizeJob/PlayAttribution/PlayIsolation/Meta。每条记录为独立场次，渠道是主售票渠道；当前不拆分同一场次的多个售票渠道座位。
 
 |角色|权限|动作|
 |---|---|---|
@@ -23,7 +23,7 @@ docker compose up -d --build
 docker compose exec -T backend python -m scripts.seed_demo
 ```
 
-前端 [localhost:18211](http://localhost:18211)，后端 [localhost:19211/docs](http://localhost:19211/docs)，MySQL宿主17711。账号 `admin@demo.local`、`analyst@demo.local`、`viewer@demo.local`，密码均 `Demo123!`。`SEED_DEMO=true`启动自动种子；再次执行不新增同编号、不覆盖人工修订。种子包含180独立场次、3场馆、3渠道、4演出、9–10月日期。
+前端 [localhost:18211](http://localhost:18211)，后端 [localhost:19211/docs](http://localhost:19211/docs)，MySQL宿主17711。账号 `admin@demo.local`、`analyst@demo.local`、`viewer@demo.local`，密码均 `Demo123!`。`SEED_DEMO=true`启动自动种子；再次执行不新增同编号、不覆盖人工修订。种子包含192独立场次、3场馆、3渠道、4标准演出、22条别名规则（含多级指向、循环、交叠歧义、跨场馆无匹配），其中7场在归一试算时进入隔离。
 
 ## 一天的剧本
 
@@ -44,6 +44,14 @@ docker compose exec -T backend python -m scripts.seed_demo
 
 提交时冻结输入快照，worker保留checksum。下钻只读该快照，原始明细修订不会改变历史结果。差异=回单预期净额−冻结账面净额，可正可负。签核只确认复核理由，不改账、不付款。已签核Review不可更新，需新增复核；Pivot为不可覆盖版本，重新计算需新建。空数据、重复场次或非法维度失败可恢复，补录/调整后新建任务。单worker启动恢复queued/running任务。
 
+## 演出归一规则与口径
+
+同一巡演改名会被拆成多组，跨场馆同名又可能被误并，因此别名规则按**场馆 + 生效起止日期**限定：仅当规则的场馆等于场次场馆、别名与场次原始演出名精确一致、且生效窗口覆盖场次日期时才命中。规则指向二选一：`target_play_id` 直接落到标准演出，或 `target_rule_id` 指向另一条规则形成多级链，链尾必须落到标准演出；启用接口拦截循环与悬空链，运行期仍检出 cycle/invalid_chain 并隔离。同场馆同名别名在同一日期命中多条生效规则判为交叠歧义（overlap），没有任何命中判为 no_match，四类异常场次全部进入隔离，不参与合格透视。原始演出名永不覆盖，归属表另存 `original_play` 与完整规则链，页面可逐条解释归属链。
+
+规则与场次各维护单调版本（`meta_kv`）。规则草稿可任意改，启用中的规则不可直接改；任何规则增改/启停推进规则版本，场次录入或修订推进场次版本。归一任务分 trial（草稿试算，只写结果不落归属）与 activate（启用）：任务记录入队时的两个版本，worker 处理时比对当前版本，版本过期的启用直接失败，提示重新试算；失败可续跑，已完成任务重入直接返回，绝不重复归并。启用在单事务内删除旧归属/隔离、写入新清单并切换 `active_job_id`，归属与隔离清单原子切换；旧批次明细保留可追溯，旧透视不带批次号，保持原解释不变。
+
+每次试算/启用都做守恒校验：合格场次数 + 隔离场次数 = 来源场次数，且票款、退款、渠道费、净额合计逐项相等，否则任务失败。透视新增白名单维度 `nplay`（标准演出），选择该维度必须指定当前激活批次；透视快照只含该批次合格场次，结果与导出均注明隔离场次数及排除金额，合格净额加隔离净额等于来源净额。隔离明细可在页面下载 `play-isolations-<id>.json`。
+
 ## 技术和目录
 
 |层|实现|
@@ -53,7 +61,7 @@ docker compose exec -T backend python -m scripts.seed_demo
 |持久化|MySQL8 + Redis7 + 共享结果卷|
 |网关|Nginx1.27，同源`/api/`剥离前缀转到后端根路由|
 
-`backend/src`分routes/controllers/services/models/schemas/config/middlewares/utils/constants；`frontend/src`分api/stores/pages/components/hooks/utils/constants/types/router。Settlement、Pivot、Review贯穿数据库/API/页面。请求ID、安全响应头两中间件；写操作审计、全局错误响应。角色ROLES、状态STATES、维度DIMENSIONS、场馆VENUES、渠道CHANNELS：后端`src/constants/enums.py`与`schemas/business.py`，前端`src/constants/enums.js`；算法维度白名单另见后端`services/analysis.py`；持久化列见models/entities.py。
+`backend/src`分routes/controllers/services/models/schemas/config/middlewares/utils/constants；`frontend/src`分api/stores/pages/components/hooks/utils/constants/types/router。Settlement、Pivot、Review贯穿数据库/API/页面；归一由 StandardPlay、AliasRule、NormalizeJob、PlayAttribution、PlayIsolation 承载，纯计算在`services/normalization.py`，事务与版本在`services/normalize_service.py`。请求ID、安全响应头两中间件；写操作审计、全局错误响应。角色ROLES、状态STATES、维度DIMENSIONS（含nplay标准演出）、场馆VENUES、渠道CHANNELS、隔离原因ISOLATION_REASONS：后端`src/constants/enums.py`与`schemas/business.py`，前端`src/constants/enums.js`；算法维度白名单另见后端`services/analysis.py`；持久化列见models/entities.py，归一表DDL见`migrations/002_normalization.sql`。
 
 5服务frontend/backend/worker/db/redis均有healthcheck。backend等db/redis，worker额外等backend，frontend等backend。MySQL/Redis/结果使用命名卷，worker `/tmp/heartbeat`验证活性，结果落共享 `/artifacts`。`NETWORK_SUBNET=10.253.112.0/24`规避本机默认地址池耗尽，可移机修改；其他环境变量COMPOSE_PROJECT_NAME、FRONTEND_PORT、BACKEND_PORT、DB_PORT、DB_PASSWORD、JWT_SECRET、SEED_DEMO见.env.example。演示密码与JWT密钥部署时替换。
 
